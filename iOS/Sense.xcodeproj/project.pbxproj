@@ -1,0 +1,444 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		0E56C6B2891E34ECD88712B6 /* DeviceMonitor.swift in Sources */ = {isa = PBXBuildFile; fileRef = D32E8D9074A8964D84312449 /* DeviceMonitor.swift */; };
+		1970CF6834FBC6B8D036EB04 /* Metrics.swift in Sources */ = {isa = PBXBuildFile; fileRef = D101BE0C3FEAD622B523D88D /* Metrics.swift */; };
+		4FF5054E94F0961F9B56149A /* DashboardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C588FB936AF0DCA622EA982D /* DashboardView.swift */; };
+		5DCB4995CA5141C181209A56 /* SenseApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF81CEA9347196769C7E4CCB /* SenseApp.swift */; };
+		8F5BE9C9436CA40C78720C5C /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = E0D551FD426095A37F950164 /* PrivacyInfo.xcprivacy */; };
+		A10F8F921F895E4AD9942D3A /* MetricsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4F4C3D609A925FB22B40D37D /* MetricsTests.swift */; };
+		EC7D8D82D7C6FE24B20A886A /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A35F65D73E10EEAA7298ACD9 /* Assets.xcassets */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		144E034A57B968FBF90D329A /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = A0B681BFC0C8035DEA79E007 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 02CDB67A02BB4FB84606D931;
+			remoteInfo = Sense;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXFileReference section */
+		2305AD50FC65E70049964733 /* SenseTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = SenseTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		4F4C3D609A925FB22B40D37D /* MetricsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MetricsTests.swift; sourceTree = "<group>"; };
+		A35F65D73E10EEAA7298ACD9 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		A5AB8BA9F6C5D57E66668B34 /* Sense.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Sense.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		C588FB936AF0DCA622EA982D /* DashboardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardView.swift; sourceTree = "<group>"; };
+		D101BE0C3FEAD622B523D88D /* Metrics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Metrics.swift; sourceTree = "<group>"; };
+		D32E8D9074A8964D84312449 /* DeviceMonitor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceMonitor.swift; sourceTree = "<group>"; };
+		E0D551FD426095A37F950164 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
+		FF81CEA9347196769C7E4CCB /* SenseApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SenseApp.swift; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXGroup section */
+		0B3AC15F8AEC14CECDF037C0 /* Sense */ = {
+			isa = PBXGroup;
+			children = (
+				A35F65D73E10EEAA7298ACD9 /* Assets.xcassets */,
+				C588FB936AF0DCA622EA982D /* DashboardView.swift */,
+				D32E8D9074A8964D84312449 /* DeviceMonitor.swift */,
+				D101BE0C3FEAD622B523D88D /* Metrics.swift */,
+				E0D551FD426095A37F950164 /* PrivacyInfo.xcprivacy */,
+				FF81CEA9347196769C7E4CCB /* SenseApp.swift */,
+			);
+			path = Sense;
+			sourceTree = "<group>";
+		};
+		318CE820270EF6E913FC4B4E /* SenseTests */ = {
+			isa = PBXGroup;
+			children = (
+				4F4C3D609A925FB22B40D37D /* MetricsTests.swift */,
+			);
+			path = SenseTests;
+			sourceTree = "<group>";
+		};
+		81109BA7D4C161D75B10DE2E = {
+			isa = PBXGroup;
+			children = (
+				0B3AC15F8AEC14CECDF037C0 /* Sense */,
+				318CE820270EF6E913FC4B4E /* SenseTests */,
+				E73FD71658659EFADD44ABE2 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		E73FD71658659EFADD44ABE2 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				A5AB8BA9F6C5D57E66668B34 /* Sense.app */,
+				2305AD50FC65E70049964733 /* SenseTests.xctest */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		02CDB67A02BB4FB84606D931 /* Sense */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = DF35E4FBC66D88BCA29DA2FA /* Build configuration list for PBXNativeTarget "Sense" */;
+			buildPhases = (
+				2412E162221B92445FF6A2C7 /* Sources */,
+				B3639814B9FAA04E8C45C34C /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = Sense;
+			packageProductDependencies = (
+			);
+			productName = Sense;
+			productReference = A5AB8BA9F6C5D57E66668B34 /* Sense.app */;
+			productType = "com.apple.product-type.application";
+		};
+		A695143534235605136741F9 /* SenseTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 41C7F906691AA78DDEEA4B6F /* Build configuration list for PBXNativeTarget "SenseTests" */;
+			buildPhases = (
+				6FDB91F88F5E9F60C7DCA889 /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				CBAD90C4BB7372D02968BDCD /* PBXTargetDependency */,
+			);
+			name = SenseTests;
+			packageProductDependencies = (
+			);
+			productName = SenseTests;
+			productReference = 2305AD50FC65E70049964733 /* SenseTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		A0B681BFC0C8035DEA79E007 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 1430;
+				TargetAttributes = {
+					02CDB67A02BB4FB84606D931 = {
+						DevelopmentTeam = X8N2K68Y35;
+						ProvisioningStyle = Automatic;
+					};
+					A695143534235605136741F9 = {
+						DevelopmentTeam = X8N2K68Y35;
+						ProvisioningStyle = Automatic;
+					};
+				};
+			};
+			buildConfigurationList = C9F07A5B04BE218984A552FD /* Build configuration list for PBXProject "Sense" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				en,
+			);
+			mainGroup = 81109BA7D4C161D75B10DE2E;
+			minimizedProjectReferenceProxies = 1;
+			preferredProjectObjectVersion = 77;
+			productRefGroup = E73FD71658659EFADD44ABE2 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				02CDB67A02BB4FB84606D931 /* Sense */,
+				A695143534235605136741F9 /* SenseTests */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		B3639814B9FAA04E8C45C34C /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				EC7D8D82D7C6FE24B20A886A /* Assets.xcassets in Resources */,
+				8F5BE9C9436CA40C78720C5C /* PrivacyInfo.xcprivacy in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		2412E162221B92445FF6A2C7 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				4FF5054E94F0961F9B56149A /* DashboardView.swift in Sources */,
+				0E56C6B2891E34ECD88712B6 /* DeviceMonitor.swift in Sources */,
+				1970CF6834FBC6B8D036EB04 /* Metrics.swift in Sources */,
+				5DCB4995CA5141C181209A56 /* SenseApp.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		6FDB91F88F5E9F60C7DCA889 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A10F8F921F895E4AD9942D3A /* MetricsTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		CBAD90C4BB7372D02968BDCD /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 02CDB67A02BB4FB84606D931 /* Sense */;
+			targetProxy = 144E034A57B968FBF90D329A /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		0CC717783A3DF9ABF575B3F1 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = Sense;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = UIInterfaceOrientationPortrait;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.mohanavenkatesh.sense;
+				PRODUCT_NAME = Sense;
+				SDKROOT = iphoneos;
+				SUPPORTS_MACCATALYST = NO;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		127105F7E6CB825E62E3CFFE /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGN_STYLE = Automatic;
+				COPY_PHASE_STRIP = NO;
+				CURRENT_PROJECT_VERSION = 1;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				DEVELOPMENT_TEAM = X8N2K68Y35;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MARKETING_VERSION = 1.0.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		516002649E26C87E8155AAF5 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = Sense;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = UIInterfaceOrientationPortrait;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.mohanavenkatesh.sense;
+				PRODUCT_NAME = Sense;
+				SDKROOT = iphoneos;
+				SUPPORTS_MACCATALYST = NO;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		54CAE158B2287E02D7903BAF /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGN_STYLE = Automatic;
+				COPY_PHASE_STRIP = NO;
+				CURRENT_PROJECT_VERSION = 1;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				DEVELOPMENT_TEAM = X8N2K68Y35;
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MARKETING_VERSION = 1.0.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+		5A79BBF4098CDBEF07E2BBBC /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.sense.SenseTests;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Sense.app/Sense";
+			};
+			name = Release;
+		};
+		B2370E2F9DDF330C960CF57C /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.sense.SenseTests;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Sense.app/Sense";
+			};
+			name = Debug;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		41C7F906691AA78DDEEA4B6F /* Build configuration list for PBXNativeTarget "SenseTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				B2370E2F9DDF330C960CF57C /* Debug */,
+				5A79BBF4098CDBEF07E2BBBC /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		C9F07A5B04BE218984A552FD /* Build configuration list for PBXProject "Sense" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				127105F7E6CB825E62E3CFFE /* Debug */,
+				54CAE158B2287E02D7903BAF /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		DF35E4FBC66D88BCA29DA2FA /* Build configuration list for PBXNativeTarget "Sense" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				0CC717783A3DF9ABF575B3F1 /* Debug */,
+				516002649E26C87E8155AAF5 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = A0B681BFC0C8035DEA79E007 /* Project object */;
+}

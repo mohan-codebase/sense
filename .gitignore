@@ -1,0 +1,10 @@
+.DS_Store
+dist/
+backup/
+graphify-out/
+iOS/build/
+iOS/build-device/
+**/xcuserdata/
+**/DerivedData/
+*.dmg
+*.app
