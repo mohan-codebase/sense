@@ -1,31 +1,28 @@
 <p align="center">
-  <img src="assets/Sense-icon.png" alt="Sense app icon" width="112">
+  <img src="assets/Sense-icon.png" alt="Sense app icon" width="96">
 </p>
 
 <h1 align="center">Sense</h1>
 
 <p align="center">
-  Live system readings and recent activity charts, one click away in your Mac’s menu bar.
+  Live system monitoring from your Mac’s menu bar.
 </p>
 
 <p align="center">
   <a href="#install">Install</a> ·
   <a href="#use-sense">Use Sense</a> ·
-  <a href="#troubleshooting">Troubleshooting</a> ·
-  <a href="#build-and-test">Build and test</a>
+  <a href="#troubleshooting">Troubleshooting</a>
 </p>
 
 <p align="center">
-  <img src="previews/Sense-overview.png" alt="Sense development preview showing the light dashboard, dark dashboard, and card settings" width="880">
+  <img src="previews/Sense-overview.png" alt="Sense’s light and dark dashboards, showing live readings and recent activity charts" width="860">
 </p>
 
 <p align="center">
-  <a href="previews/Sense-light.png">Light dashboard</a> ·
-  <a href="previews/Sense-dark.png">Dark dashboard</a> ·
-  <a href="previews/Sense-settings.png">Settings</a>
+  <sub>Development preview with sample readings ·
+  <a href="previews/Sense-light.png">Light mode</a> ·
+  <a href="previews/Sense-dark.png">Dark mode</a></sub>
 </p>
-
-<p align="center"><sub>Development preview with sample readings.</sub></p>
 
 ## Install
 
@@ -42,7 +39,7 @@ open dist/Sense.app
 
 1. Click the Sense icon in the menu bar to see CPU, GPU, memory, storage, network, temperature, and battery readings.
 2. Hover over a chart to inspect a sample. Expand **Memory**, **Sensors**, **Battery**, or **Top Processes** for details.
-3. Open **Settings** using the gear icon to choose a history window, rearrange cards, turn on Compact mode, or configure alerts.
+3. Open **Settings** using the gear icon to choose a history window, rearrange cards, turn on Compact mode, or configure alerts. [Card settings preview](previews/Sense-settings.png)
 
 Sense keeps readings and history on your Mac. The dashboard follows your system appearance and uses native Liquid Glass on macOS 26 and later.
 
