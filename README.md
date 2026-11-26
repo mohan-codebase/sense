@@ -11,6 +11,7 @@
 <p align="center">
   <a href="#install">Install</a> ·
   <a href="#use-sense">Use Sense</a> ·
+  <a href="#watch-the-demos">Watch the demos</a> ·
   <a href="#troubleshooting">Troubleshooting</a>
 </p>
 
@@ -42,6 +43,32 @@ open dist/Sense.app
 3. Open **Settings** using the gear icon to choose a history window, rearrange cards, turn on Compact mode, or configure alerts. [Card settings preview](previews/Sense-settings.png)
 
 Sense keeps readings and history on your Mac. The dashboard follows your system appearance and uses native Liquid Glass on macOS 26 and later.
+
+## Watch the demos
+
+Each clip is eight seconds and uses sample readings.
+
+[![Sense updates live network readings and shows past values when you hover over a chart](docs/media/sense-dashboard.gif)](docs/media/sense-dashboard.mp4)
+
+[Watch or download the live dashboard MP4](docs/media/sense-dashboard.mp4)
+
+<details>
+<summary>Explore memory pressure</summary>
+
+[![Opening the Memory section reveals the pressure graph and a breakdown of memory use](docs/media/sense-memory.gif)](docs/media/sense-memory.mp4)
+
+[Watch or download the memory pressure MP4](docs/media/sense-memory.mp4)
+
+</details>
+
+<details>
+<summary>Set up Compact mode</summary>
+
+[![Enabling Compact mode and selecting cards in Settings changes which cards appear on the dashboard](docs/media/sense-compact.gif)](docs/media/sense-compact.mp4)
+
+[Watch or download the Compact mode MP4](docs/media/sense-compact.mp4)
+
+</details>
 
 ## Troubleshooting
 
