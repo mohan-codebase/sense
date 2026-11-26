@@ -65,20 +65,36 @@ func strokeGradient(through pts: [NSPoint], from: NSColor, to: NSColor, width: C
     }
 }
 
+typealias CPUTicks = (busy: UInt64, total: UInt64)
+
+/// Mach returns unsigned counters in an array whose element type is signed.
+func cpuTickValue(_ value: Int32) -> UInt64 {
+    UInt64(UInt32(bitPattern: value))
+}
+
 /// Cumulative (busy, total) CPU ticks across all cores.
-func cpuTicks() -> (busy: UInt64, total: UInt64)? {
+func cpuTicks() -> CPUTicks? {
     var cores: natural_t = 0
     var info: processor_info_array_t?
     var count: mach_msg_type_number_t = 0
     guard host_processor_info(mach_host_self(), PROCESSOR_CPU_LOAD_INFO, &cores, &info, &count) == KERN_SUCCESS, let info else { return nil }
     defer { vm_deallocate(mach_task_self_, vm_address_t(bitPattern: info), vm_size_t(count) * vm_size_t(MemoryLayout<integer_t>.stride)) }
+    guard cores > 0, Int(cores) <= Int(count) / Int(CPU_STATE_MAX) else { return nil }
     var busy: UInt64 = 0, idle: UInt64 = 0
     for c in 0..<Int(cores) {
         let b = c * Int(CPU_STATE_MAX)
-        busy += UInt64(info[b + Int(CPU_STATE_USER)]) + UInt64(info[b + Int(CPU_STATE_SYSTEM)]) + UInt64(info[b + Int(CPU_STATE_NICE)])
-        idle += UInt64(info[b + Int(CPU_STATE_IDLE)])
+        busy += cpuTickValue(info[b + Int(CPU_STATE_USER)]) + cpuTickValue(info[b + Int(CPU_STATE_SYSTEM)]) + cpuTickValue(info[b + Int(CPU_STATE_NICE)])
+        idle += cpuTickValue(info[b + Int(CPU_STATE_IDLE)])
     }
     return (busy, busy + idle)
+}
+
+func cpuLoadFraction(from previous: CPUTicks, to current: CPUTicks) -> Double? {
+    guard current.total > previous.total, current.busy >= previous.busy else { return nil }
+    let totalDelta = current.total - previous.total
+    let busyDelta = current.busy - previous.busy
+    guard busyDelta <= totalDelta else { return nil }
+    return Double(busyDelta) / Double(totalDelta)
 }
 
 struct MemStats {
@@ -86,6 +102,7 @@ struct MemStats {
     var app = 0.0, wired = 0.0, compressed = 0.0
     var pressure = 0.0   // 0...1, share of memory under pressure
     var level = 1        // 1 normal, 2 warning, 4 critical
+    var pressureAvailable = false
 }
 
 /// Memory figures counted the way Activity Monitor's memory panel does.
@@ -109,25 +126,18 @@ func memoryStats() -> MemStats? {
     var swapSize = MemoryLayout<xsw_usage>.size
     if sysctlbyname("vm.swapusage", &swap, &swapSize, nil, 0) == 0 { m.swap = Double(swap.xsu_used) }
     var free: Int32 = 100, size = MemoryLayout<Int32>.size
-    sysctlbyname("kern.memorystatus_level", &free, &size, nil, 0)
+    let hasPressure = sysctlbyname("kern.memorystatus_level", &free, &size, nil, 0) == 0
     m.pressure = min(max(1 - Double(free) / 100, 0), 1)
     var level: Int32 = 1
     size = MemoryLayout<Int32>.size
-    sysctlbyname("kern.memorystatus_vm_pressure_level", &level, &size, nil, 0)
+    let hasLevel = sysctlbyname("kern.memorystatus_vm_pressure_level", &level, &size, nil, 0) == 0
     m.level = Int(level)
+    m.pressureAvailable = hasPressure && hasLevel
     return m
 }
 
-/// Cards are quiet content surfaces inside one native glass panel.
-/// Keeping glass at the panel level avoids stacking refractive materials.
-class GlassDrawingView: NSView {
-    override func draw(_ dirtyRect: NSRect) { drawContent(dirtyRect) }
-    func invalidateContent(_ rect: NSRect) { setNeedsDisplay(rect) }
-    func drawContent(_ dirtyRect: NSRect) {}
-}
-
 /// Replica of Activity Monitor's memory panel: pressure graph, totals, and breakdown in one row.
-final class MemoryPanel: GlassDrawingView {
+final class MemoryPanel: NSView {
     var stats = MemStats()
     var history: [Double] = []
     var levels: [Int] = []
@@ -158,55 +168,29 @@ final class MemoryPanel: GlassDrawingView {
     func advanceTimeline(to now: TimeInterval) {
         windowEnd = now - 1
         let region = NSRect(x: 16, y: 32, width: max(bounds.width - 32, 0), height: 62)
-        invalidateContent(region)
+        setNeedsDisplay(region)
     }
 
     private var tint: NSColor { Self.palette(stats.level).stroke }
 
-    /// Saturated pressure colors retain their meaning in both appearances.
+    /// Pressure bands retain the status recorded for each sample.
     static func palette(_ level: Int) -> (top: NSColor, bottom: NSColor, stroke: NSColor) {
-        let stroke: NSColor = level >= 4 ? .systemRed : level >= 2 ? .systemOrange : .emerald
-        return (stroke.withAlphaComponent(0.48), stroke.withAlphaComponent(0.20), stroke)
+        let status = HealthState.memoryPressure(level)
+        return (status.fill.withAlphaComponent(0.75), status.fill.withAlphaComponent(0.34), status.chartInk)
     }
 
-    private func gb(_ b: Double) -> String { String(format: "%.2f GB", b / 1_073_741_824) }
-    private func swap(_ b: Double) -> String { b >= 1_073_741_824 ? gb(b) : String(format: "%.1f MB", b / 1_048_576) }
-
-    override func drawContent(_ dirtyRect: NSRect) {
-        let r = bounds.insetBy(dx: 12, dy: 4)
-
-        drawGlass(r, radius: 11)
-
-        // Top: pressure graph across the full width
-        let style = NSMutableParagraphStyle()
-        style.alignment = .center
-        NSAttributedString(string: "MEMORY PRESSURE · LIVE (\(Preferences.shared.rangeLabel.uppercased()))", attributes: [.font: NSFont.systemFont(ofSize: 9, weight: .bold),
-                           .foregroundColor: NSColor.cardSecondary, .paragraphStyle: style])
-            .draw(in: NSRect(x: r.minX, y: r.minY + 8, width: r.width, height: 13))
-        line(NSPoint(x: r.minX + 14, y: r.minY + 25), NSPoint(x: r.maxX - 14, y: r.minY + 25))
-        let g = NSRect(x: r.minX + 10, y: r.minY + 30, width: r.width - 20, height: 56)
-        graphRect = g
-        let pts = history.isEmpty ? [stats.pressure] : history
-        let lv = levels.count == pts.count ? levels : [Int](repeating: stats.level, count: pts.count)
-        let curve: [NSPoint] = pts.enumerated().map { i, v in
-            let fraction = sampleTimes.count == pts.count
-                ? 1 - (windowEnd - sampleTimes[i]) / Self.windowDuration
-                : (pts.count == 1 ? 1 : Double(i) / Double(pts.count - 1))
-            return NSPoint(x: g.minX + g.width * CGFloat(fraction),
-                           y: g.maxY - max(g.height * CGFloat(v), 3))
-        }
+    static func drawPressureArea(through curve: [NSPoint], levels lv: [Int], in g: NSRect) {
         // The newest sample may lie just beyond the visible edge. Clipping the
         // measured line gives smooth movement without adding synthetic samples.
         NSGraphicsContext.saveGraphicsState()
         NSBezierPath(rect: g).addClip()
-        // Like Activity Monitor: a straight-edged area chart, coloured by the pressure level at each moment.
         func band(_ level: Int) -> Int { level >= 4 ? 4 : level >= 2 ? 2 : 1 }
         var start = 0
         while start < curve.count {
             var end = start
             while end + 1 < curve.count, band(lv[end + 1]) == band(lv[start]) { end += 1 }
             let last = min(end + 1, curve.count - 1)   // overlap one point so runs meet without a gap
-            let colours = Self.palette(lv[start])
+            let colours = palette(lv[start])
             let poly = NSBezierPath()
             poly.move(to: NSPoint(x: curve[start].x, y: g.maxY))
             for k in start...last { poly.line(to: curve[k]) }
@@ -245,6 +229,38 @@ final class MemoryPanel: GlassDrawingView {
             }
             start = end + 1
         }
+        NSGraphicsContext.restoreGraphicsState()
+    }
+
+    private func gb(_ b: Double) -> String { String(format: "%.2f GB", b / 1_073_741_824) }
+    private func swap(_ b: Double) -> String { b >= 1_073_741_824 ? gb(b) : String(format: "%.1f MB", b / 1_048_576) }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let r = bounds.insetBy(dx: 12, dy: 4)
+
+        drawCard(r, radius: 11)
+
+        // Top: pressure graph across the full width
+        let style = NSMutableParagraphStyle()
+        style.alignment = .center
+        NSAttributedString(string: "MEMORY PRESSURE · LIVE (\(Preferences.shared.rangeLabel.uppercased()))", attributes: [.font: NSFont.systemFont(ofSize: 9, weight: .bold),
+                           .foregroundColor: NSColor.cardSecondary, .paragraphStyle: style])
+            .draw(in: NSRect(x: r.minX, y: r.minY + 8, width: r.width, height: 13))
+        line(NSPoint(x: r.minX + 14, y: r.minY + 25), NSPoint(x: r.maxX - 14, y: r.minY + 25))
+        let g = NSRect(x: r.minX + 10, y: r.minY + 30, width: r.width - 20, height: 56)
+        graphRect = g
+        let pts = history.isEmpty && stats.pressureAvailable ? [stats.pressure] : history
+        let lv = levels.count == pts.count ? levels : [Int](repeating: stats.level, count: pts.count)
+        let curve: [NSPoint] = pts.enumerated().map { i, v in
+            let fraction = sampleTimes.count == pts.count
+                ? 1 - (windowEnd - sampleTimes[i]) / Self.windowDuration
+                : (pts.count == 1 ? 1 : Double(i) / Double(pts.count - 1))
+            return NSPoint(x: g.minX + g.width * CGFloat(fraction),
+                           y: g.maxY - max(g.height * CGFloat(v), 3))
+        }
+        Self.drawPressureArea(through: curve, levels: lv, in: g)
+        NSGraphicsContext.saveGraphicsState()
+        NSBezierPath(rect: g).addClip()
         if let latest = curve.last {
             Self.palette(lv.last ?? stats.level).stroke.setFill()
             NSBezierPath(ovalIn: NSRect(x: latest.x - 1.5, y: latest.y - 1.5, width: 3, height: 3)).fill()
@@ -270,7 +286,7 @@ final class MemoryPanel: GlassDrawingView {
                 .font: NSFont.monospacedDigitSystemFont(ofSize: 10, weight: .medium), .foregroundColor: NSColor.cardLabel])
             let w = label.size().width + 12
             let pill = NSRect(x: min(max(pt.x - w / 2, g.minX), g.maxX - w), y: r.minY + 6, width: w, height: 16)
-            NSColor.windowBackgroundColor.withAlphaComponent(0.9).setFill()
+            NSColor.cardSurface.setFill()
             NSBezierPath(roundedRect: pill, xRadius: 8, yRadius: 8).fill()
             label.draw(at: NSPoint(x: pill.minX + 6, y: pill.minY + 2))
         }
@@ -333,28 +349,60 @@ func gpuUtilization() -> Double? {
         guard IORegistryEntryCreateCFProperties(svc, &props, kCFAllocatorDefault, 0) == KERN_SUCCESS,
               let d = props?.takeRetainedValue() as? [String: Any],
               let perf = d["PerformanceStatistics"] as? [String: Any],
-              let util = perf["Device Utilization %"] as? Int else { continue }
+              let util = perf["Device Utilization %"] as? Int, (0...100).contains(util) else { continue }
         best = max(best ?? 0, Double(util) / 100)
     }
     return best
 }
 
-/// Cumulative bytes received/sent on Ethernet and Wi-Fi interfaces (32-bit counters; subtract with wrapping).
-func netBytes() -> (rx: UInt32, tx: UInt32) {
-    var rx: UInt32 = 0, tx: UInt32 = 0
+typealias NetworkCounters = [String: (rx: UInt32, tx: UInt32)]
+
+/// Cumulative bytes received and sent, keyed by Ethernet or Wi-Fi interface.
+func netBytes() -> NetworkCounters {
+    var counters: NetworkCounters = [:]
     var head: UnsafeMutablePointer<ifaddrs>?
-    guard getifaddrs(&head) == 0, let first = head else { return (0, 0) }
+    guard getifaddrs(&head) == 0, let first = head else { return counters }
     defer { freeifaddrs(head) }
     var p: UnsafeMutablePointer<ifaddrs>? = first
     while let ifa = p {
-        if String(cString: ifa.pointee.ifa_name).hasPrefix("en"), ifa.pointee.ifa_addr?.pointee.sa_family == UInt8(AF_LINK), let data = ifa.pointee.ifa_data {
+        let name = String(cString: ifa.pointee.ifa_name)
+        if name.hasPrefix("en"), ifa.pointee.ifa_addr?.pointee.sa_family == UInt8(AF_LINK), let data = ifa.pointee.ifa_data {
             let d = data.assumingMemoryBound(to: if_data.self).pointee
-            rx = rx &+ d.ifi_ibytes
-            tx = tx &+ d.ifi_obytes
+            counters[name] = (d.ifi_ibytes, d.ifi_obytes)
         }
         p = ifa.pointee.ifa_next
     }
-    return (rx, tx)
+    return counters
+}
+
+struct NetworkSampler {
+    private var previous: (counters: NetworkCounters, time: TimeInterval)?
+    private var rates: (down: Double, up: Double) = (0, 0)
+
+    mutating func sample(_ counters: NetworkCounters, at time: TimeInterval) -> (down: Double, up: Double) {
+        guard !counters.isEmpty else {
+            previous = nil
+            rates = (0, 0)
+            return rates
+        }
+        guard let previous else {
+            self.previous = (counters: counters, time: time)
+            rates = (0, 0)
+            return rates
+        }
+        let elapsed = time - previous.time
+        guard elapsed >= 0.1 else { return rates }
+        self.previous = (counters: counters, time: time)
+        var received: UInt64 = 0, sent: UInt64 = 0
+        for (name, current) in counters {
+            guard let last = previous.counters[name] else { continue }
+            // A decrease can be a reset or rollover. Rebaseline that direction.
+            if current.rx >= last.rx { received += UInt64(current.rx - last.rx) }
+            if current.tx >= last.tx { sent += UInt64(current.tx - last.tx) }
+        }
+        rates = (Double(received) / elapsed, Double(sent) / elapsed)
+        return rates
+    }
 }
 
 func diskSpace() -> (free: Double, total: Double)? {
@@ -398,98 +446,104 @@ func rate(_ bytesPerSec: Double) -> (String, String) {
     return (String(format: "%.0f", bytesPerSec), "B/s")
 }
 
-/// Resolve custom drawing against the current appearance, including live theme changes.
-private var isDarkAppearance: Bool {
-    NSAppearance.currentDrawing().bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+private func rgbColor(_ hex: UInt32) -> NSColor {
+    NSColor(srgbRed: CGFloat((hex >> 16) & 0xff) / 255,
+            green: CGFloat((hex >> 8) & 0xff) / 255,
+            blue: CGFloat(hex & 0xff) / 255, alpha: 1)
 }
 
-/// Vivid accents on dark glass, with saturated deeper variants on light glass.
-private func accent(_ r: CGFloat, _ g: CGFloat, _ b: CGFloat) -> NSColor {
-    let color = NSColor(srgbRed: r, green: g, blue: b, alpha: 1)
-    var h: CGFloat = 0, s: CGFloat = 0, v: CGFloat = 0, a: CGFloat = 0
-    color.getHue(&h, saturation: &s, brightness: &v, alpha: &a)
-    let light = NSColor(hue: h, saturation: max(s, 0.88), brightness: min(v, 0.72), alpha: 1)
-    return NSColor(name: nil) { appearance in
-        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? color : light
-    }
-}
-
-/// Appearance-aware chart and icon palette.
-extension NSColor {
-    static var cardLabel: NSColor { .labelColor }
-    static var cardSecondary: NSColor { .secondaryLabelColor }
-    static var cardSeparator: NSColor { .separatorColor }
-    static var glass: NSColor { .labelColor }
-    // Distinct, saturated metric colors remain visible through the native material.
-    static var mint: NSColor { accent(0.10, 0.96, 0.68) }
-    static var violet: NSColor { accent(0.72, 0.48, 1.00) }
-    static var rose: NSColor { accent(1.00, 0.34, 0.66) }
-    static var periwinkle: NSColor { accent(0.38, 0.60, 1.00) }
-    static var azure: NSColor { accent(0.10, 0.74, 1.00) }
-    static var lime: NSColor { accent(0.60, 0.96, 0.22) }
-    static var apricot: NSColor { .systemOrange }
-    static var aqua: NSColor { accent(0.05, 0.88, 0.95) }
-    static var emerald: NSColor { accent(0.18, 0.92, 0.48) }
-    static var cyan: NSColor { azure }
-    static var netDown: NSColor { azure }
-    static var netUp: NSColor { mint }
-}
-
-/// Blends two colours through hue, saturation and brightness (taking the shorter way round the colour wheel),
-/// so mixes stay vivid instead of cancelling to grey the way a straight RGB blend does.
-func vividMix(_ a: NSColor, _ b: NSColor, _ t: Double) -> NSColor {
-    guard let x = a.usingColorSpace(.sRGB), let y = b.usingColorSpace(.sRGB) else { return a.blended(withFraction: CGFloat(t), of: b) ?? b }
-    var h1: CGFloat = 0, s1: CGFloat = 0, v1: CGFloat = 0, a1: CGFloat = 0, h2: CGFloat = 0, s2: CGFloat = 0, v2: CGFloat = 0, a2: CGFloat = 0
-    x.getHue(&h1, saturation: &s1, brightness: &v1, alpha: &a1)
-    y.getHue(&h2, saturation: &s2, brightness: &v2, alpha: &a2)
-    var dh = h2 - h1
-    if dh > 0.5 { dh -= 1 } else if dh < -0.5 { dh += 1 }
-    var h = h1 + dh * CGFloat(t)
-    if h < 0 { h += 1 } else if h >= 1 { h -= 1 }
-    let k = CGFloat(t)
-    return NSColor(hue: h, saturation: s1 + (s2 - s1) * k, brightness: v1 + (v2 - v1) * k, alpha: 1)
-}
-
-/// Keep a stable metric color at normal load, escalating to orange and red near a limit.
-func heat(_ f: Double, base: NSColor = .glass) -> NSColor {
+private func appearanceColor(light: UInt32, dark: UInt32) -> NSColor {
     NSColor(name: nil) { appearance in
-        var result = base
-        appearance.performAsCurrentDrawingAppearance { result = resolvedHeat(f, base: base) }
-        return result
+        rgbColor(appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? dark : light)
     }
 }
 
-private func resolvedHeat(_ f: Double, base: NSColor) -> NSColor {
-    let x = min(max(f, 0), 1)
-    // Stable metric identity at normal load. Color only escalates near a limit.
-    if x < 0.70 { return base }
-    if x < 0.88 {
-        return base.blended(withFraction: CGFloat((x - 0.70) / 0.18), of: .systemOrange) ?? .systemOrange
-    }
-    return NSColor.systemOrange.blended(withFraction: CGFloat((x - 0.88) / 0.12), of: .systemRed) ?? .systemRed
+private func neutralColor(light: UInt8, dark: UInt8) -> NSColor {
+    appearanceColor(light: UInt32(light) * 0x010101, dark: UInt32(dark) * 0x010101)
 }
 
-/// Subtle inset surfaces give content structure without a second glass layer.
-func drawGlass(_ rect: NSRect, radius: CGFloat = 13) {
+/// Neutral dashboard surfaces, text, and chart tones.
+extension NSColor {
+    static let cardSurface = neutralColor(light: 0xFF, dark: 0x2D)
+    static let badgeSurface = neutralColor(light: 0xF0, dark: 0x39)
+    static let cardSeparator = neutralColor(light: 0xDE, dark: 0x42)
+    static let cardLabel = neutralColor(light: 0x20, dark: 0xF4)
+    static let cardSecondary = neutralColor(light: 0x45, dark: 0xB8)
+    static let chartInk = neutralColor(light: 0x65, dark: 0xAE)
+    static let emphasisInk = neutralColor(light: 0x40, dark: 0xD6)
+}
+
+func loadInk(_ load: Double) -> NSColor {
+    switch HealthState.utilization(load) {
+    case .normal: .chartInk
+    case .warning: .emphasisInk
+    case .critical: .cardLabel
+    }
+}
+
+enum HealthState: Equatable {
+    case normal, warning, critical
+
+    private static let greenChart = appearanceColor(light: 0x55BC7F, dark: 0x8DDAA9)
+    fileprivate static let orangeChart = appearanceColor(light: 0xF2A15F, dark: 0xFFC08D)
+    private static let redChart = appearanceColor(light: 0xEC8191, dark: 0xFFA0AE)
+
+    var fill: NSColor {
+        switch self {
+        case .normal: rgbColor(0xC3EECC)
+        case .warning: rgbColor(0xFFE0BC)
+        case .critical: rgbColor(0xFFCCD1)
+        }
+    }
+
+    var chartInk: NSColor {
+        switch self {
+        case .normal: Self.greenChart
+        case .warning: Self.orangeChart
+        case .critical: Self.redChart
+        }
+    }
+
+    static func memoryPressure(_ level: Int) -> Self {
+        if level >= 4 { return .critical }
+        return level >= 2 ? .warning : .normal
+    }
+
+    static func utilization(_ load: Double) -> Self {
+        if load >= 0.88 { return .critical }
+        return load >= 0.70 ? .warning : .normal
+    }
+
+    var pressureLabel: String {
+        switch self {
+        case .normal: "Normal"
+        case .warning: "Warning"
+        case .critical: "Critical"
+        }
+    }
+}
+
+func drawCard(_ rect: NSRect, radius: CGFloat = 13) {
     let path = NSBezierPath(roundedRect: rect, xRadius: radius, yRadius: radius)
-    let opaque = NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency
-    let fill: NSColor = opaque ? .controlBackgroundColor :
-        (isDarkAppearance ? NSColor.white.withAlphaComponent(0.055) : NSColor.white.withAlphaComponent(0.38))
-    fill.setFill()
+    let opacity: CGFloat = NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency ? 1 : 0.60
+    NSColor.cardSurface.withAlphaComponent(opacity).setFill()
     path.fill()
-    (isDarkAppearance ? NSColor.white.withAlphaComponent(0.085) : NSColor.black.withAlphaComponent(0.055)).setStroke()
+    NSColor.cardSeparator.setStroke()
     path.lineWidth = 0.5
     path.stroke()
 }
 
-/// Averages `a` into at most `n` buckets so long histories draw quickly.
+/// Averages a history into at most the requested number of buckets.
 func downsample(_ a: [Double], to n: Int) -> [Double] {
+    downsample(a, to: n) { $0.reduce(0, +) / Double($0.count) }
+}
+
+func downsample<T>(_ a: [T], to n: Int, reduce: (ArraySlice<T>) -> T) -> [T] {
     guard a.count > n else { return a }
     let size = Double(a.count) / Double(n)
     return (0..<n).map { i in
         let lo = Int(Double(i) * size), hi = max(Int(Double(i + 1) * size), lo + 1)
-        let slice = a[lo..<min(hi, a.count)]
-        return slice.reduce(0, +) / Double(slice.count)
+        return reduce(a[lo..<min(hi, a.count)])
     }
 }
 
@@ -521,7 +575,9 @@ struct PressureSample: Codable {
 /// Histories saved between launches (about an hour at one sample per 5 seconds).
 struct SavedHistory: Codable {
     var saved = Date()
-    var cpu: [Double] = [], gpu: [Double] = [], mem: [Double] = [], down: [Double] = [], up: [Double] = [], pressure: [Double] = []
+    var cpu: [Double] = []
+    var gpu: [Double?] = []
+    var mem: [Double] = [], down: [Double] = [], up: [Double] = [], pressure: [Double] = []
     var levels: [Int]?   // memory pressure level (1 normal, 2 warning, 4 critical) for each pressure sample
     var recentPressure: [PressureSample]? // timestamped, unaveraged live graph samples
 
@@ -560,17 +616,25 @@ struct BatteryInfo {
     var adapter = ""
 }
 
+func batteryChargePercent(current: Int, maximum: Int) -> Int? {
+    guard current >= 0, maximum > 0 else { return nil }
+    return Int((Double(min(current, maximum)) / Double(maximum) * 100).rounded())
+}
+
 func batteryInfo() -> BatteryInfo? {
     let svc = IOServiceGetMatchingService(kIOMainPortDefault, IOServiceMatching("AppleSmartBattery"))
     guard svc != 0 else { return nil }
     defer { IOObjectRelease(svc) }
     var props: Unmanaged<CFMutableDictionary>?
     guard IORegistryEntryCreateCFProperties(svc, &props, kCFAllocatorDefault, 0) == KERN_SUCCESS,
-          let d = props?.takeRetainedValue() as? [String: Any] else { return nil }
+          let d = props?.takeRetainedValue() as? [String: Any],
+          let current = (d["CurrentCapacity"] as? NSNumber)?.intValue,
+          let maximum = (d["MaxCapacity"] as? NSNumber)?.intValue,
+          let charge = batteryChargePercent(current: current, maximum: maximum) else { return nil }
     let data = d["BatteryData"] as? [String: Any] ?? [:]
     func int(_ dict: [String: Any], _ k: String) -> Int { (dict[k] as? NSNumber)?.intValue ?? 0 }
     var b = BatteryInfo()
-    b.charge = int(d, "CurrentCapacity")
+    b.charge = charge
     b.cycles = int(d, "CycleCount")
     b.designCycles = max(int(d, "DesignCycleCount9C"), 1)
     b.designMAh = int(data, "DesignCapacity")
@@ -580,7 +644,7 @@ func batteryInfo() -> BatteryInfo? {
     b.plugged = (d["ExternalConnected"] as? Bool) ?? false
     b.voltage = Double(int(d, "Voltage")) / 1000
     let amps = Int64(truncatingIfNeeded: (d["Amperage"] as? NSNumber)?.uint64Value ?? 0)
-    b.watts = b.voltage * Double(abs(amps)) / 1000
+    b.watts = b.voltage * Double(amps.magnitude) / 1000
     let t = int(d, "TimeRemaining")
     b.minutes = t > 0 && t < 65535 ? t : nil
     b.adapter = ((d["AdapterDetails"] as? [String: Any])?["Name"] as? String)?.trimmingCharacters(in: .whitespaces) ?? ""
@@ -612,7 +676,7 @@ final class BatteryProfile {
 }
 
 struct Tile {
-    enum Visual { case bars([Double]), spark([Double]), dual([Double], [Double]), bar(Double) }
+    enum Visual { case bars([Double]), spark([Double?]), dual([Double], [Double]), bar(Double) }
     var symbol: String
     var title: String
     var badge: String
@@ -621,17 +685,30 @@ struct Tile {
     var visual: Visual
     var footer: String
     var tint: NSColor
+    var status: HealthState? = nil
+    var chartState: HealthState? = nil
     var readouts: [String] = []   // text per sample, shown while hovering
     var value2 = "", unit2 = ""   // second reading for dual tiles (upload)
     var readouts2: [String] = []
     var wide = false              // spans both columns
+    var chartTint: NSColor { (status ?? chartState)?.chartInk ?? tint }
 }
 
 /// Two-column grid of rounded dashboard tiles. Hovering a tile's graph shows a marker and the value at the cursor.
-final class TileGrid: GlassDrawingView {
-    var tiles: [Tile] = [] { didSet { needsLayout = true; needsDisplay = true } }
+final class TileGrid: NSView {
+    var tiles: [Tile] = [] {
+        didSet {
+            if tiles.map(\.title) != oldValue.map(\.title) || tiles.map(\.wide) != oldValue.map(\.wide) {
+                updateHover(nil)
+                needsLayout = true
+            }
+            surfaces.forEach { $0.content.needsDisplay = true }
+        }
+    }
     override var isFlipped: Bool { true }
     static let tileHeight: CGFloat = 104, gap: CGFloat = 8, pad: CGFloat = 12
+    private static let cornerRadius: CGFloat = 13
+    private var surfaces: [(material: NSView, content: TileContentView)] = []
 
     private var hover: Int?
     private var hoverX: CGFloat = 0
@@ -651,6 +728,47 @@ final class TileGrid: GlassDrawingView {
 
     var requiredHeight: CGFloat { tiles.indices.last.map { rect($0).maxY + 6 } ?? 12 }
 
+    override func layout() {
+        super.layout()
+        while surfaces.count > tiles.count {
+            surfaces.removeLast().material.removeFromSuperview()
+        }
+        while surfaces.count < tiles.count {
+            let content = TileContentView(grid: self, index: surfaces.count)
+            let material: NSView
+            if #available(macOS 26.0, *) {
+                let glass = NSGlassEffectView()
+                glass.style = .regular
+                glass.cornerRadius = Self.cornerRadius
+                glass.contentView = content
+                material = glass
+            } else {
+                let frost = NSVisualEffectView()
+                frost.material = .popover
+                frost.blendingMode = .withinWindow
+                frost.state = .active
+                frost.wantsLayer = true
+                frost.layer?.cornerRadius = Self.cornerRadius
+                frost.layer?.masksToBounds = true
+                content.frame = frost.bounds
+                content.autoresizingMask = [.width, .height]
+                frost.addSubview(content)
+                material = frost
+            }
+            addSubview(material)
+            surfaces.append((material, content))
+        }
+        for (index, surface) in surfaces.enumerated() {
+            let frame = rect(index)
+            if surface.material.frame != frame { surface.material.frame = frame }
+        }
+    }
+
+    // The material views are decorative. Keep graph events with the grid.
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        super.hitTest(point) == nil ? nil : self
+    }
+
     // MARK: hover
 
     override func updateTrackingAreas() {
@@ -666,16 +784,22 @@ final class TileGrid: GlassDrawingView {
             let r = rect(i)
             return NSRect(x: r.minX + 8, y: r.minY + 56, width: r.width - 16, height: 38).contains(p)
         }
-        hover = now
-        needsDisplay = true
+        updateHover(now)
     }
-    override func mouseExited(with event: NSEvent) { hover = nil; needsDisplay = true }
+    override func mouseExited(with event: NSEvent) { updateHover(nil) }
+
+    private func updateHover(_ index: Int?) {
+        let previous = hover
+        hover = index
+        if let previous, previous != index, surfaces.indices.contains(previous) {
+            surfaces[previous].content.needsDisplay = true
+        }
+        if let index, surfaces.indices.contains(index) {
+            surfaces[index].content.needsDisplay = true
+        }
+    }
 
     // MARK: drawing
-
-    override func drawContent(_ dirtyRect: NSRect) {
-        for (i, t) in tiles.enumerated() where rect(i).intersects(dirtyRect) { draw(t, index: i, in: rect(i)) }
-    }
 
     private func tinted(_ symbol: String, _ color: NSColor) -> NSImage? {
         guard let base = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)?
@@ -689,7 +813,7 @@ final class TileGrid: GlassDrawingView {
     }
 
     /// Two side-by-side readings (download / upload), each with its own value and graph.
-    private func drawDual(_ t: Tile, _ down: [Double], _ up: [Double], hovered: Bool, in r: NSRect) {
+    private func drawDual(_ t: Tile, _ down: [Double], _ up: [Double], hoverX: CGFloat?, in r: NSRect) {
         let inset: CGFloat = 12, gutter: CGFloat = 16
         let half = (r.width - 2 * inset - gutter) / 2
         let divider = NSBezierPath()
@@ -700,11 +824,11 @@ final class TileGrid: GlassDrawingView {
         divider.stroke()
 
         let sides: [(String, String, String, [Double], [String], NSColor, String)] = [
-            (t.value, t.unit, "↓ Download", down, t.readouts, t.tint, "↓"),
-            (t.value2, t.unit2, "↑ Upload", up, t.readouts2, .netUp, "↑")]
+            (t.value, t.unit, "↓ Download", down, t.readouts, t.chartTint, "↓"),
+            (t.value2, t.unit2, "↑ Upload", up, t.readouts2, HealthState.orangeChart, "↑")]
         for (k, side) in sides.enumerated() {
             let x0 = r.minX + inset + CGFloat(k) * (half + gutter)
-            let big = NSAttributedString(string: side.0, attributes: [.font: NSFont.monospacedDigitSystemFont(ofSize: 23, weight: .semibold), .foregroundColor: side.5])
+            let big = NSAttributedString(string: side.0, attributes: [.font: NSFont.monospacedDigitSystemFont(ofSize: 23, weight: .semibold), .foregroundColor: NSColor.cardLabel])
             big.draw(at: NSPoint(x: x0, y: r.minY + 30))
             NSAttributedString(string: side.1, attributes: [.font: NSFont.systemFont(ofSize: 11), .foregroundColor: NSColor.cardSecondary])
                 .draw(at: NSPoint(x: x0 + big.size().width + 3, y: r.minY + 40))
@@ -727,8 +851,7 @@ final class TileGrid: GlassDrawingView {
                 strokeGradient(through: pts, from: side.5, to: side.5, width: 2.0)
             }
             var footer = side.2
-            let overThisHalf = hovered && hoverX >= x0 - gutter / 2 && hoverX < x0 + half + gutter / 2
-            if overThisHalf, pts.count > 1 {
+            if let hoverX, hoverX >= x0 - gutter / 2, hoverX < x0 + half + gutter / 2, pts.count > 1 {
                 let idx = min(max(Int(((hoverX - v.minX) / v.width * CGFloat(pts.count - 1)).rounded()), 0), pts.count - 1)
                 let p = pts[idx]
                 let guide = NSBezierPath()
@@ -751,10 +874,14 @@ final class TileGrid: GlassDrawingView {
         }
     }
 
-    private func draw(_ t: Tile, index: Int, in base: NSRect) {
-        let hovered = hover == index
-        let r = base
-        drawGlass(r, radius: 13)
+    fileprivate func drawTile(at index: Int, in r: NSRect) {
+        guard tiles.indices.contains(index) else { return }
+        let t = tiles[index]
+        let localHoverX = hover == index ? hoverX - rect(index).minX : nil
+        let chartTint = t.chartTint
+        let opacity: CGFloat = NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency ? 1 : 0.22
+        NSColor.cardSurface.withAlphaComponent(opacity).setFill()
+        NSBezierPath(roundedRect: r, xRadius: Self.cornerRadius, yRadius: Self.cornerRadius).fill()
 
         func text(_ s: String, _ font: NSFont, _ color: NSColor, left: CGFloat? = nil, right: CGFloat? = nil, y: CGFloat) {
             let a = NSAttributedString(string: s, attributes: [.font: font, .foregroundColor: color])
@@ -770,55 +897,64 @@ final class TileGrid: GlassDrawingView {
         }
         text(t.title, .systemFont(ofSize: 11, weight: .medium), .cardLabel, left: r.minX + inset + 21, y: r.minY + 10)
 
-        let badge = NSAttributedString(string: t.badge, attributes: [.font: NSFont.systemFont(ofSize: 9.5, weight: .medium), .foregroundColor: NSColor.cardSecondary])
+        let badgeInk = t.status == nil ? NSColor.cardSecondary : NSColor(white: 0.18, alpha: 1)
+        let badge = NSAttributedString(string: t.badge, attributes: [.font: NSFont.systemFont(ofSize: 9.5, weight: .medium), .foregroundColor: badgeInk])
         let bw = badge.size().width + 12
         let pill = NSRect(x: r.maxX - inset - bw, y: r.minY + 9, width: bw, height: 16)
-        (isDarkAppearance ? NSColor.white.withAlphaComponent(0.09) : NSColor.black.withAlphaComponent(0.045)).setFill()
+        (t.status?.fill ?? .badgeSurface).setFill()
         NSBezierPath(roundedRect: pill, xRadius: 6, yRadius: 6).fill()
         badge.draw(at: NSPoint(x: pill.minX + 6, y: pill.minY + 2))
 
         if case .dual(let down, let up) = t.visual {
-            drawDual(t, down, up, hovered: hovered, in: r)
+            drawDual(t, down, up, hoverX: localHoverX, in: r)
             return
         }
-        let big = NSAttributedString(string: t.value, attributes: [.font: NSFont.monospacedDigitSystemFont(ofSize: 23, weight: .semibold), .foregroundColor: t.tint])
+        let big = NSAttributedString(string: t.value, attributes: [.font: NSFont.monospacedDigitSystemFont(ofSize: 23, weight: .semibold), .foregroundColor: NSColor.cardLabel])
         big.draw(at: NSPoint(x: r.minX + inset, y: r.minY + 30))
         text(t.unit, .systemFont(ofSize: 11, weight: .regular), .cardSecondary, left: r.minX + inset + big.size().width + 3, y: r.minY + 40)
 
         let v = NSRect(x: r.minX + inset, y: r.minY + 65, width: r.width - 2 * inset, height: 15)
         var footer = t.footer
-        let idxAt: (Int) -> Int = { n in min(max(Int(((self.hoverX - v.minX) / v.width * CGFloat(n - 1)).rounded()), 0), n - 1) }
+        let idxAt: (Int) -> Int = { n in
+            guard let localHoverX, n > 1 else { return -1 }
+            return min(max(Int(((localHoverX - v.minX) / v.width * CGFloat(n - 1)).rounded()), 0), n - 1)
+        }
 
         switch t.visual {
         case .bars(let values):
             let n = max(values.count, 1)
             let gapW: CGFloat = 3
             let bw = (v.width - gapW * CGFloat(n - 1)) / CGFloat(n)
-            let focus = hovered && values.count > 1 ? idxAt(values.count) : -1
+            let focus = idxAt(values.count)
             for (i, f) in values.enumerated() {
                 let hgt = max(v.height * CGFloat(min(f, 1)), 1.5)
-                t.tint.withAlphaComponent(i == focus ? 1 : 0.92 + 0.08 * CGFloat(min(f, 1))).setFill()
+                chartTint.withAlphaComponent(i == focus ? 1 : 0.92 + 0.08 * CGFloat(min(f, 1))).setFill()
                 NSBezierPath(roundedRect: NSRect(x: v.minX + CGFloat(i) * (bw + gapW), y: v.maxY - hgt, width: bw, height: hgt), xRadius: 1.5, yRadius: 1.5).fill()
             }
             if focus >= 0, focus < t.readouts.count, !t.readouts[focus].isEmpty { footer = "at cursor · " + t.readouts[focus] }
         case .spark(let values):
-            let pts: [NSPoint] = values.enumerated().map { i, f in
-                NSPoint(x: v.minX + v.width * CGFloat(values.count < 2 ? 1 : Double(i) / Double(values.count - 1)),
-                        y: v.maxY - max(v.height * CGFloat(min(f, 1)), 1))
+            let pts: [NSPoint?] = values.enumerated().map { i, value in
+                value.map { fraction in
+                    NSPoint(x: v.minX + v.width * CGFloat(values.count < 2 ? 1 : Double(i) / Double(values.count - 1)),
+                            y: v.maxY - max(v.height * CGFloat(min(fraction, 1)), 1))
+                }
             }
-            guard let first = pts.first else { break }
-            let line = NSBezierPath()
-            line.move(to: first)
-            addSmoothCurve(to: line, through: pts)
-            let fill = line.copy() as! NSBezierPath
-            fill.line(to: NSPoint(x: pts.last!.x, y: v.maxY))
-            fill.line(to: NSPoint(x: first.x, y: v.maxY))
-            fill.close()
-            t.tint.withAlphaComponent(0.26).setFill()
-            fill.fill()
-            strokeGradient(through: pts, from: t.tint, to: t.tint, width: 2.0)
-            if hovered, pts.count > 1 {
-                let k = idxAt(pts.count), p = pts[k]
+            for segment in pts.split(whereSeparator: { $0 == nil }) {
+                let points = segment.compactMap { $0 }
+                guard let first = points.first, let last = points.last else { continue }
+                let fill = NSBezierPath()
+                fill.move(to: first)
+                addSmoothCurve(to: fill, through: points)
+                fill.line(to: NSPoint(x: last.x, y: v.maxY))
+                fill.line(to: NSPoint(x: first.x, y: v.maxY))
+                fill.close()
+                chartTint.withAlphaComponent(0.26).setFill()
+                fill.fill()
+                strokeGradient(through: points, from: chartTint, to: chartTint, width: 2.0)
+            }
+            let k = idxAt(pts.count)
+            if k >= 0 {
+                guard let p = pts[k] else { break }
                 let guide = NSBezierPath()
                 guide.move(to: NSPoint(x: p.x, y: v.minY - 2))
                 guide.line(to: NSPoint(x: p.x, y: v.maxY))
@@ -826,11 +962,11 @@ final class TileGrid: GlassDrawingView {
                 guide.lineWidth = 0.75
                 NSColor.tertiaryLabelColor.setStroke()
                 guide.stroke()
-                t.tint.withAlphaComponent(0.3).setFill()
+                chartTint.withAlphaComponent(0.3).setFill()
                 NSBezierPath(ovalIn: NSRect(x: p.x - 5, y: p.y - 5, width: 10, height: 10)).fill()
                 NSColor.white.setFill()
                 NSBezierPath(ovalIn: NSRect(x: p.x - 3, y: p.y - 3, width: 6, height: 6)).fill()
-                t.tint.setFill()
+                chartTint.setFill()
                 NSBezierPath(ovalIn: NSRect(x: p.x - 2, y: p.y - 2, width: 4, height: 4)).fill()
                 if k < t.readouts.count { footer = "at cursor · " + t.readouts[k] }
             }
@@ -838,14 +974,32 @@ final class TileGrid: GlassDrawingView {
             break   // drawn by drawDual
         case .bar(let f):
             let track = NSRect(x: v.minX, y: v.midY - 4, width: v.width, height: 8)
-            (isDarkAppearance ? NSColor.white.withAlphaComponent(0.10) : NSColor.black.withAlphaComponent(0.07)).setFill()
+            NSColor.cardSeparator.setFill()
             NSBezierPath(roundedRect: track, xRadius: 4, yRadius: 4).fill()
             var fill = track
             fill.size.width = max(track.width * CGFloat(min(max(f, 0), 1)), 8)
-            t.tint.setFill()
+            chartTint.setFill()
             NSBezierPath(roundedRect: fill, xRadius: 4, yRadius: 4).fill()
         }
         text(footer, .systemFont(ofSize: 10.5), .cardSecondary, left: r.minX + inset, y: r.minY + 86)
+    }
+}
+
+private final class TileContentView: NSView {
+    private weak var grid: TileGrid?
+    private let index: Int
+    override var isFlipped: Bool { true }
+
+    init(grid: TileGrid, index: Int) {
+        self.grid = grid
+        self.index = index
+        super.init(frame: .zero)
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    override func draw(_ dirtyRect: NSRect) {
+        grid?.drawTile(at: index, in: bounds)
     }
 }
 
@@ -910,7 +1064,7 @@ final class DisclosureHeader: NSView {
             tinted.draw(in: NSRect(x: r.minX, y: bounds.midY - tinted.size.height / 2, width: tinted.size.width, height: tinted.size.height),
                         from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
         }
-        let t = NSAttributedString(string: title, attributes: [.font: NSFont.systemFont(ofSize: 12, weight: .semibold), .foregroundColor: NSColor.labelColor])
+        let t = NSAttributedString(string: title, attributes: [.font: NSFont.systemFont(ofSize: 12, weight: .semibold), .foregroundColor: NSColor.cardLabel])
         t.draw(at: NSPoint(x: r.minX + 18, y: bounds.midY - t.size().height / 2))
         if !expanded, !summary.isEmpty {
             let attrs: [NSAttributedString.Key: Any] = [.font: NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .regular), .foregroundColor: NSColor.cardSecondary]
@@ -925,13 +1079,13 @@ final class DisclosureHeader: NSView {
 }
 
 /// Plain two-column detail table with dividers.
-final class KeyValueTable: GlassDrawingView {
+final class KeyValueTable: NSView {
     var rows: [(String, String)] = []
     override var isFlipped: Bool { true }
 
-    override func drawContent(_ dirtyRect: NSRect) {
+    override func draw(_ dirtyRect: NSRect) {
         let r = bounds.insetBy(dx: 12, dy: 4)
-        drawGlass(r, radius: 11)
+        drawCard(r, radius: 11)
         guard !rows.isEmpty else { return }
         let rowH = (r.height - 8) / CGFloat(rows.count)
         let font = NSFont.systemFont(ofSize: 11.5)
@@ -1061,17 +1215,17 @@ struct SensorRow {
     var name: String
     var value: String
     var status: String
-    var color: NSColor
+    var health: HealthState?
 }
 
 /// Table of temperatures and thermal pressure: name, reading, status.
-final class SensorTable: GlassDrawingView {
+final class SensorTable: NSView {
     var rows: [SensorRow] = []
     override var isFlipped: Bool { true }
 
-    override func drawContent(_ dirtyRect: NSRect) {
+    override func draw(_ dirtyRect: NSRect) {
         let r = bounds.insetBy(dx: 12, dy: 4)
-        drawGlass(r, radius: 11)
+        drawCard(r, radius: 11)
 
         let valueRight = r.maxX - 118
         func put(_ s: String, right: CGFloat? = nil, left: CGFloat? = nil, y: CGFloat, font: NSFont, color: NSColor) {
@@ -1090,8 +1244,12 @@ final class SensorTable: GlassDrawingView {
             let y = r.minY + 36 + rowH * CGFloat(i)
             put(row.name, left: r.minX + 14, y: y, font: name, color: .cardLabel)
             put(row.value, right: valueRight, y: y, font: digits, color: .cardSecondary)
-            row.color.setFill()
-            NSBezierPath(ovalIn: NSRect(x: valueRight + 16, y: y + 4.5, width: 8, height: 8)).fill()
+            let dot = NSBezierPath(ovalIn: NSRect(x: valueRight + 16, y: y + 4.5, width: 8, height: 8))
+            (row.health?.fill ?? .badgeSurface).setFill()
+            dot.fill()
+            NSColor.cardSecondary.withAlphaComponent(0.6).setStroke()
+            dot.lineWidth = 0.5
+            dot.stroke()
             put(row.status, left: valueRight + 30, y: y, font: .systemFont(ofSize: 12), color: .cardSecondary)
         }
     }
@@ -1103,7 +1261,7 @@ private final class ProcessAccessibilityRow: NSAccessibilityElement {
 }
 
 /// "Top Processes" table: select a process to review quit actions.
-final class ProcessTable: GlassDrawingView {
+final class ProcessTable: NSView {
     var rows: [ProcRow] = [] {
         didSet {
             clampOffset()
@@ -1189,9 +1347,9 @@ final class ProcessTable: GlassDrawingView {
         b >= 1_073_741_824 ? String(format: "%.2f GB", b / 1_073_741_824) : String(format: "%.1f MB", b / 1_048_576)
     }
 
-    override func drawContent(_ dirtyRect: NSRect) {
+    override func draw(_ dirtyRect: NSRect) {
         let r = bounds.insetBy(dx: 12, dy: 4)
-        drawGlass(r, radius: 11)
+        drawCard(r, radius: 11)
 
         let memRight = r.maxX - 66, cpuRight = r.maxX - 14
         func put(_ s: String, right x: CGFloat? = nil, left: CGFloat? = nil, y: CGFloat, font: NSFont, color: NSColor) {
@@ -1217,7 +1375,7 @@ final class ProcessTable: GlassDrawingView {
                 let row = rows[i]
                 let y = top + rowH * CGFloat(i) - offset
                 if selectedProcess?.isSameProcess(as: row) == true {
-                    NSColor.controlAccentColor.withAlphaComponent(0.22).setFill()
+                    NSColor.badgeSurface.setFill()
                     NSBezierPath(roundedRect: NSRect(x: r.minX + 5, y: y - 3, width: r.width - 10, height: rowH), xRadius: 5, yRadius: 5).fill()
                 }
                 var title = row.name
@@ -1247,11 +1405,21 @@ func menuLine(_ text: String, color: NSColor = .labelColor, size: CGFloat = 11) 
     NSAttributedString(string: text, attributes: [.font: NSFont.systemFont(ofSize: size), .foregroundColor: color])
 }
 
-/// Borderless panel that can take key status (for Esc and ⌘Q) without activating the app.
+final class GlassContentView: NSView {
+    private static let backgroundTint = neutralColor(light: 0xFC, dark: 0x1C)
+
+    override func draw(_ dirtyRect: NSRect) {
+        // Keep text legible over dark or busy backdrops while letting the glass show through.
+        Self.backgroundTint.withAlphaComponent(0.56).setFill()
+        dirtyRect.fill()
+    }
+}
+
 final class PanelDocumentView: NSView {
     override var isFlipped: Bool { true }
 }
 
+/// Borderless panel that can take key status (for Esc and ⌘Q).
 final class FloatingPanel: NSPanel {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
@@ -1293,7 +1461,7 @@ final class QuitRow: NSView {
             NSColor.labelColor.withAlphaComponent(0.07).setFill()
             NSBezierPath(roundedRect: bounds.insetBy(dx: 8, dy: 2), xRadius: 6, yRadius: 6).fill()
         }
-        let title = NSAttributedString(string: "Quit Sense", attributes: [.font: NSFont.systemFont(ofSize: 13), .foregroundColor: NSColor.labelColor])
+        let title = NSAttributedString(string: "Quit Sense", attributes: [.font: NSFont.systemFont(ofSize: 13), .foregroundColor: NSColor.cardLabel])
         title.draw(at: NSPoint(x: 18, y: bounds.midY - title.size().height / 2))
         let hint = NSAttributedString(string: "⌘Q", attributes: [.font: NSFont.systemFont(ofSize: 12), .foregroundColor: NSColor.cardSecondary])
         hint.draw(at: NSPoint(x: bounds.maxX - 18 - hint.size().width, y: bounds.midY - hint.size().height / 2))
@@ -1321,28 +1489,29 @@ struct AlertEpisode {
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    private static let storageWarningFraction = 0.9
     private let prefs = Preferences.shared
     private var settingsController: SettingsController?
     private var tileHeightConstraint: NSLayoutConstraint?
-    private var rangeControl: NSPopUpButton?
-    private var compactControl: NSButton?
-    private var sortControl: NSPopUpButton?
     private let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     private let sensorTable = SensorTable(frame: NSRect(x: 0, y: 0, width: 340, height: 158))
     private let procTable = ProcessTable(frame: NSRect(x: 0, y: 0, width: 340, height: 236))
     private let sampler = ProcessSampler()
     private let tiles = TileGrid(frame: NSRect(x: 0, y: 0, width: 340, height: 6 + 4 * TileGrid.tileHeight + 3 * TileGrid.gap + 6))
+    private var availableTiles: [Tile] = []
+    private let emptyTiles = NSTextField(labelWithString: "No tiles shown")
     private var cpuLoad = 0.0
     private var cpuBars: [Double] = []
-    private var gpuHist: [Double] = [], memHist: [Double] = [], netHist: [Double] = [], upHist: [Double] = []
-    private var prevNet = netBytes()
-    private var prevNetTime = Date()
+    private var gpuHist: [Double?] = []
+    private var memHist: [Double] = [], netHist: [Double] = [], upHist: [Double] = []
+    private var networkSampler = NetworkSampler()
     private var downRate = 0.0, upRate = 0.0
     private let chip = chipName()
     private var lastDie: Double?, lastBody: Double?
-    private var lastLabel = "Nominal"
+    private var lastLabel = "Unknown"
+    private var lastThermalStatus: HealthState?
     private var lastMem = MemStats()
-    private var lastGPU = 0.0
+    private var lastGPU: Double?
     private let memPanel = MemoryPanel(frame: NSRect(x: 0, y: 0, width: 340, height: 264))
     private let memHeader = DisclosureHeader(frame: NSRect(x: 0, y: 0, width: 340, height: 32))
     private let sensorHeader = DisclosureHeader(frame: NSRect(x: 0, y: 0, width: 340, height: 32))
@@ -1358,7 +1527,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var alertEpisodes: [String: AlertEpisode] = [:]
     private var batteryHighAlerted = false, batteryLowAlerted = false
     private var batteryPrimed = false
-    private var iconName = ""
     private var sections: [(DisclosureHeader, NSView)] = []
     private let panel = FloatingPanel(contentRect: NSRect(x: 0, y: 0, width: 340, height: 400),
                                       styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: true)
@@ -1367,8 +1535,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let document = PanelDocumentView()
     private var globalClicks: Any?, localKeys: Any?
     private let panelWidth: CGFloat = 380
-    private let panelCornerRadius: CGFloat = 22
     private var lastBatt: BatteryInfo?
+    private var thermalOverLimit: Bool { lastDie.map { $0 >= prefs.number("temperatureLimit") } ?? false }
     private var diskUsedFraction = 0.0
     private var saveTick = 0
     private let historyCap = 720
@@ -1380,7 +1548,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         buildPanel()
-        NotificationCenter.default.addObserver(forName: Preferences.changed, object: nil, queue: .main) { [weak self] _ in self?.applyPreferences() }
+        NotificationCenter.default.addObserver(forName: Preferences.changed, object: nil, queue: .main) { [weak self] note in
+            if let key = note.userInfo?["key"] as? String, Preferences.tileVisibilityKeys.contains(key) {
+                self?.applyTileLayout()
+            } else {
+                self?.applyPreferences()
+            }
+        }
         applyPreferences()
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
 
@@ -1396,12 +1570,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         profileTimer = Timer(timeInterval: 600, repeats: true) { [weak self] _ in self?.battProfile.refresh() }
         RunLoop.main.add(profileTimer!, forMode: .common)
         refresh()
-        if let button = item.button {
-            button.imagePosition = .imageOnly
-            button.title = ""
-        }
-        setMenuBarIcon()
-        updateMenuReadings()
         NotificationCenter.default.addObserver(forName: ProcessInfo.thermalStateDidChangeNotification, object: nil, queue: .main) { [weak self] _ in self?.refresh() }
         timer = Timer(timeInterval: 5, repeats: true) { [weak self] _ in self?.refresh() }
         RunLoop.main.add(timer!, forMode: .common)
@@ -1409,7 +1577,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: floating panel
 
-    /// Stacks the tiles, collapsible sections and Quit row inside a frosted, borderless panel.
+    /// Stacks the tiles, collapsible sections and Quit row inside a borderless panel.
     private func buildPanel() {
         stack.orientation = .vertical
         stack.spacing = 0
@@ -1424,48 +1592,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if view === tiles { tileHeightConstraint = height }
             stack.addArrangedSubview(view)
         }
-        let heading = NSView(frame: NSRect(x: 0, y: 0, width: panelWidth, height: 50))
+        let heading = NSView(frame: NSRect(x: 0, y: 0, width: panelWidth, height: 42))
         let title = NSTextField(labelWithString: "Sense")
         title.font = .systemFont(ofSize: 19, weight: .semibold)
-        title.frame = NSRect(x: 18, y: 24, width: 120, height: 24)
-        let subtitle = NSTextField(labelWithString: "Your Mac, at a glance")
-        subtitle.font = .systemFont(ofSize: 11)
-        subtitle.textColor = .secondaryLabelColor
-        subtitle.frame = NSRect(x: 18, y: 7, width: 200, height: 16)
+        title.textColor = .cardLabel
+        title.frame = NSRect(x: 18, y: 9, width: 120, height: 24)
         let live = NSTextField(labelWithString: "LIVE · " + chip)
         live.font = .systemFont(ofSize: 10, weight: .medium)
-        live.textColor = .secondaryLabelColor
+        live.textColor = .cardSecondary
         live.alignment = .right
-        live.frame = NSRect(x: panelWidth - 142, y: 27, width: 90, height: 16)
+        live.frame = NSRect(x: panelWidth - 142, y: 13, width: 90, height: 16)
         let settings = NSButton(image: NSImage(systemSymbolName: "gearshape", accessibilityDescription: "Settings")!, target: self, action: #selector(openSettings))
         settings.isBordered = false
-        settings.contentTintColor = .secondaryLabelColor
-        settings.frame = NSRect(x: panelWidth - 44, y: 20, width: 28, height: 28)
+        settings.contentTintColor = .cardSecondary
+        settings.frame = NSRect(x: panelWidth - 44, y: 7, width: 28, height: 28)
         settings.toolTip = "Sense Settings"
         settings.setAccessibilityLabel("Sense Settings")
-        [title, subtitle, live, settings].forEach(heading.addSubview)
+        [title, live, settings].forEach(heading.addSubview)
         add(heading)
-
-        let toolbar = NSView(frame: NSRect(x: 0, y: 0, width: panelWidth, height: 34))
-        let history = NSTextField(labelWithString: "History")
-        history.font = .systemFont(ofSize: 11)
-        history.textColor = .secondaryLabelColor
-        history.frame = NSRect(x: 18, y: 10, width: 46, height: 16)
-        toolbar.addSubview(history)
-        let range = NSPopUpButton(frame: NSRect(x: 65, y: 5, width: 92, height: 26))
-        range.addItems(withTitles: ["2 min", "15 min", "1 hour"])
-        range.controlSize = .small
-        range.font = .systemFont(ofSize: 11)
-        range.setAccessibilityLabel("Chart history")
-        range.target = self; range.action = #selector(changeRange(_:))
-        toolbar.addSubview(range); rangeControl = range
-        let compact = NSButton(checkboxWithTitle: "Compact", target: self, action: #selector(changeCompact(_:)))
-        compact.controlSize = .small
-        compact.font = .systemFont(ofSize: 11)
-        compact.frame = NSRect(x: panelWidth - 96, y: 9, width: 82, height: 20)
-        toolbar.addSubview(compact); compactControl = compact
-        add(toolbar)
         add(tiles)
+        emptyTiles.frame.size.height = 40
+        emptyTiles.alignment = .center
+        emptyTiles.font = .systemFont(ofSize: 11)
+        emptyTiles.textColor = .secondaryLabelColor
+        emptyTiles.isHidden = true
+        add(emptyTiles)
         add(DividerRow(frame: NSRect(x: 0, y: 0, width: panelWidth, height: 9)))
 
         // Collapsible sections, closed by default. Opening one closes the others.
@@ -1509,47 +1660,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         section("Memory", header: memHeader, body: memPanel)
         section("Sensors", header: sensorHeader, body: sensorTable)
         section("Battery", header: battHeader, body: battTable)
-        let processBody = NSView(frame:NSRect(x:0,y:0,width:panelWidth,height:270))
-        procTable.frame = NSRect(x: 0, y: 0, width: panelWidth, height: 236)
-        procTable.autoresizingMask = [.width]
         procTable.toolTip = "Click a process to quit or force quit it."
         procTable.onActivate = { [weak self] row in self?.confirmEndProcess(row) }
-        processBody.addSubview(procTable)
-        let sort = NSPopUpButton(frame:NSRect(x:12,y:240,width:108,height:26)); sort.addItems(withTitles:["Memory ↓","CPU ↓"])
-        sort.setAccessibilityLabel("Sort processes, highest usage first")
-        sort.target = self; sort.action = #selector(changeSort(_:)); processBody.addSubview(sort); sortControl = sort
-        let monitor = NSButton(title:"Activity Monitor ↗",target:self,action:#selector(openActivityMonitor)); monitor.bezelStyle = .rounded
-        monitor.frame = NSRect(x:panelWidth - 174,y:238,width:158,height:28); processBody.addSubview(monitor)
-        section("Top Processes", header: procHeader, body: processBody)
+        section("Top Processes", header: procHeader, body: procTable)
         add(DividerRow(frame: NSRect(x: 0, y: 0, width: panelWidth, height: 9)))
         let quit = QuitRow(frame: NSRect(x: 0, y: 0, width: panelWidth, height: 32))
         quit.onClick = { NSApp.terminate(nil) }
         add(quit)
 
-        let effect: NSView
+        // Clip the whole effect, including the scrolling content, to the window's rounded shape.
+        let cornerRadius: CGFloat = 18
+        let surface = NSView()
+        surface.wantsLayer = true
+        surface.layer?.cornerRadius = cornerRadius
+        surface.layer?.masksToBounds = true
+        let material: NSView
+        let content: NSView
         if #available(macOS 26.0, *) {
             let glass = NSGlassEffectView()
             glass.style = .regular
-            glass.cornerRadius = panelCornerRadius
-            let content = NSView()
+            glass.cornerRadius = cornerRadius
+            content = GlassContentView()
             glass.contentView = content
-            effect = content
-            panel.contentView = glass
-            // Native glass supplies its own edge treatment; the window shadow uses
-            // rectangular bounds and leaves a second outline behind the rounded surface.
-            panel.hasShadow = false
+            material = glass
         } else {
             let frost = NSVisualEffectView()
             frost.material = .menu
             frost.blendingMode = .behindWindow
             frost.state = .active
-            frost.wantsLayer = true
-            frost.layer?.cornerRadius = panelCornerRadius
-            frost.layer?.masksToBounds = true
-            effect = frost
-            panel.contentView = frost
-            panel.hasShadow = true
+            content = frost
+            material = frost
         }
+        material.frame = surface.bounds
+        material.autoresizingMask = [.width, .height]
+        surface.addSubview(material)
+        panel.contentView = surface
+        panel.hasShadow = false
         scroll.drawsBackground = false
         scroll.hasVerticalScroller = true
         scroll.autohidesScrollers = true
@@ -1557,13 +1703,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         scroll.borderType = .noBorder
         scroll.translatesAutoresizingMaskIntoConstraints = false
         scroll.documentView = document
-        effect.addSubview(scroll)
+        content.addSubview(scroll)
         document.addSubview(stack)
         NSLayoutConstraint.activate([
-            scroll.topAnchor.constraint(equalTo: effect.topAnchor, constant: 6),
-            scroll.bottomAnchor.constraint(equalTo: effect.bottomAnchor, constant: -6),
-            scroll.leadingAnchor.constraint(equalTo: effect.leadingAnchor),
-            scroll.trailingAnchor.constraint(equalTo: effect.trailingAnchor),
+            scroll.topAnchor.constraint(equalTo: content.topAnchor, constant: 6),
+            scroll.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -6),
+            scroll.leadingAnchor.constraint(equalTo: content.leadingAnchor),
+            scroll.trailingAnchor.constraint(equalTo: content.trailingAnchor),
             stack.topAnchor.constraint(equalTo: document.topAnchor),
             stack.leadingAnchor.constraint(equalTo: document.leadingAnchor),
             stack.widthAnchor.constraint(equalToConstant: panelWidth)])
@@ -1580,6 +1726,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         item.menu = nil
         item.button?.target = self
         item.button?.action = #selector(togglePanel)
+        item.button?.isBordered = false
+        item.button?.image = SenseMark.menuBarIcon()
+        item.button?.imagePosition = .imageOnly
+        item.button?.toolTip = "Sense"
+        item.button?.setAccessibilityLabel("Sense")
     }
 
     private var panelHeight: CGFloat {
@@ -1598,7 +1749,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let top = panel.frame.maxY
         panel.setFrame(NSRect(x: panel.frame.minX, y: top - h, width: panelWidth, height: h), display: true)
         panel.contentView?.layoutSubtreeIfNeeded()
-        panel.invalidateShadow()
     }
 
     @objc private func togglePanel() {
@@ -1618,7 +1768,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         scroll.contentView.scroll(to: .zero)
         scroll.reflectScrolledClipView(scroll.contentView)
         procTable.scrollToTop()
-        panel.invalidateShadow()
         panel.makeKey()
 
         // Live updates while open.
@@ -1642,8 +1791,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         updateProcesses()
 
         // Close on a click anywhere else, on Esc, and handle ⌘Q.
-        globalClicks = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown]) { [weak self] _ in
-            self?.hidePanel()
+        globalClicks = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown]) { [weak self] event in
+            guard let self else { return }
+            if event.type == .leftMouseDown, let button = self.item.button, let window = button.window {
+                let buttonFrame = window.convertToScreen(button.convert(button.bounds, to: nil))
+                let click = event.window?.convertPoint(toScreen: event.locationInWindow) ?? event.locationInWindow
+                // Give the button's action sole ownership of the toggle.
+                if buttonFrame.contains(click) { return }
+            }
+            self.hidePanel()
         }
         localKeys = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             if event.keyCode == 53 { self?.hidePanel(); return nil }
@@ -1685,7 +1841,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// Brief spikes stay quiet. Ongoing conditions alert once, then rearm after recovery.
     private func checkAlerts(thermal: ProcessInfo.ThermalState, label: String) {
-        let hot = prefs.bool("temperatureAlerts") && ((lastDie ?? 0) >= prefs.number("temperatureLimit") || thermal == .serious || thermal == .critical)
+        let hot = prefs.bool("temperatureAlerts") && (thermalOverLimit || thermal == .serious || thermal == .critical)
         if episode("heat", active: hot) {
             let detail = lastDie.map { "CPU at " + prefs.temperature($0) + ". Give your Mac a moment to cool." } ?? "Give your Mac a moment to cool."
             notify("heat", "Your Mac is running warm", detail)
@@ -1716,7 +1872,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if episode("memory", active: memoryHigh) {
             notify("memory", "Memory usage is high", "Close an unused app to give your Mac more room.")
         }
-        if episode("disk", active: prefs.bool("otherAlerts") && diskUsedFraction > 0.9, delay: 30) {
+        if episode("disk", active: prefs.bool("otherAlerts") && diskUsedFraction > Self.storageWarningFraction, delay: 30) {
             notify("disk", "Storage is getting full", String(format: "%.0f%% used. Clear some space when convenient.", diskUsedFraction * 100), cooldown: 86_400)
         }
         if episode("cpu", active: prefs.bool("otherAlerts") && cpuLoad > 0.85, delay: 300) {
@@ -1726,12 +1882,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// CPU load and memory figures; cheap enough to run every second while the menu is open.
     private func updateLive(sampleHistory: Bool) {
-        if let now = cpuTicks(), let prev = prevTicks, now.total > prev.total {
-            cpuLoad = Double(now.busy - prev.busy) / Double(now.total - prev.total)
+        let currentTicks = cpuTicks()
+        if let currentTicks, let prevTicks, let load = cpuLoadFraction(from: prevTicks, to: currentTicks) {
+            cpuLoad = load
         }
-        prevTicks = cpuTicks()
+        prevTicks = currentTicks
         if let m = memoryStats() {
-            if sampleHistory {
+            if sampleHistory && m.pressureAvailable {
                 pressureHistory.append(m.pressure)
                 levelHistory.append(m.level)
                 if pressureHistory.count > 720 { pressureHistory.removeFirst(pressureHistory.count - 720) }
@@ -1741,10 +1898,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // Keep the live graph separate from the persisted five-second history.
             // Timestamps preserve honest spacing when the panel has been closed.
             let now = Date.timeIntervalSinceReferenceDate
-            if let last = recentPressure.last, Int(last.time) == Int(now) {
-                recentPressure.removeLast() // the background and live timers can share a second
+            if m.pressureAvailable {
+                if let last = recentPressure.last, Int(last.time) == Int(now) {
+                    recentPressure.removeLast() // the background and live timers can share a second
+                }
+                recentPressure.append(PressureSample(time: now, value: m.pressure, level: m.level))
             }
-            recentPressure.append(PressureSample(time: now, value: m.pressure, level: m.level))
             recentPressure.removeAll { $0.time < now - 3602 }
             let visiblePressure = recentPressure.filter { $0.time >= now - prefs.range - 2 }
             memPanel.history = visiblePressure.map { $0.value }
@@ -1763,17 +1922,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         settingsController = SettingsController()
         settingsController?.present()
     }
-    @objc private func changeRange(_ sender: NSPopUpButton) { prefs.set("range", [120,900,3600][sender.indexOfSelectedItem]) }
-    @objc private func changeCompact(_ sender: NSButton) { prefs.set("compact", sender.state == .on) }
-    @objc private func changeSort(_ sender: NSPopUpButton) { prefs.set("sortCPU", sender.indexOfSelectedItem == 1) }
-    @objc private func openActivityMonitor() {
-        hidePanel()
-        if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier:"com.apple.ActivityMonitor") { NSWorkspace.shared.openApplication(at:url, configuration:NSWorkspace.OpenConfiguration()) }
-    }
     private func applyPreferences() {
-        rangeControl?.selectItem(at: [120.0,900,3600].firstIndex(of:prefs.range) ?? 0)
-        compactControl?.state = prefs.bool("compact") ? .on : .off
-        sortControl?.selectItem(at:prefs.bool("sortCPU") ? 1 : 0)
         for (header,body) in sections {
             header.isHidden = prefs.bool("compact")
             body.isHidden = prefs.bool("compact") || !header.expanded
@@ -1783,18 +1932,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         updateProcesses()
         if panel.isVisible { hidePanel(); showPanel() }
     }
-    private func updateMenuReadings() {
-        var parts = [String]()
-        if prefs.bool("menuTemperature"), let die = lastDie { parts.append(prefs.temperature(die)) }
-        if prefs.bool("menuMemory"), lastMem.total > 0 { parts.append(String(format:"MEM %.0f%%",lastMem.used / lastMem.total * 100)) }
-        if prefs.bool("menuNetwork") { let d = rate(downRate), u = rate(upRate); parts.append("↓\(d.0)\(d.1) ↑\(u.0)\(u.1)") }
-        item.length = NSStatusItem.variableLength
-        item.button?.imagePosition = parts.isEmpty ? .imageOnly : .imageLeading
-        item.button?.font = .monospacedDigitSystemFont(ofSize:11,weight:.medium)
-        item.button?.title = parts.isEmpty ? "" : " " + parts.joined(separator:" · ")
-        item.button?.toolTip = "Sense — system monitor"
-    }
-
     private func saveHistory() {
         SavedHistory(cpu: cpuBars, gpu: gpuHist, mem: memHist, down: netHist, up: upHist, pressure: pressureHistory, levels: levelHistory, recentPressure: recentPressure).write()
     }
@@ -1802,15 +1939,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillTerminate(_ notification: Notification) { saveHistory() }
 
     private func updateTiles(sample: Bool, record: Bool) {
-        func push(_ a: inout [Double], _ v: Double, _ cap: Int) { a.append(v); if a.count > cap { a.removeFirst(a.count - cap) } }
+        func push<T>(_ a: inout [T], _ v: T, _ cap: Int) { a.append(v); if a.count > cap { a.removeFirst(a.count - cap) } }
         func state(_ f: Double) -> String { f < 0.08 ? "idle" : f < 0.4 ? "light" : f < 0.75 ? "busy" : "heavy" }
         let memFrac = lastMem.total > 0 ? lastMem.used / lastMem.total : 0
         if sample {
-            lastGPU = gpuUtilization() ?? 0
-            let now = Date(), cur = netBytes(), dt = max(now.timeIntervalSince(prevNetTime), 0.1)
-            downRate = Double(cur.rx &- prevNet.rx) / dt
-            upRate = Double(cur.tx &- prevNet.tx) / dt
-            prevNet = cur; prevNetTime = now
+            lastGPU = gpuUtilization()
+            (downRate, upRate) = networkSampler.sample(netBytes(), at: ProcessInfo.processInfo.systemUptime)
             if record {
                 push(&cpuBars, cpuLoad, historyCap)
                 push(&gpuHist, lastGPU, historyCap)
@@ -1826,49 +1960,68 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let recentCPU = Array(cpuBars.suffix(9))
         let bars = Array(repeating: 0.0, count: max(9 - recentCPU.count, 0)) + recentCPU
         let count = Int(prefs.range / 5)
-        let gpuD = downsample(Array(gpuHist.suffix(count)), to: 120), memD = downsample(Array(memHist.suffix(count)), to: 120)
+        let gpuD = downsample(Array(gpuHist.suffix(count)), to: 120) { bucket in
+            let readings = bucket.compactMap { $0 }
+            return readings.isEmpty ? nil : readings.reduce(0, +) / Double(readings.count)
+        }
+        let memD = downsample(Array(memHist.suffix(count)), to: 120)
+        let memoryStatus = lastMem.pressureAvailable ? HealthState.memoryPressure(lastMem.level) : nil
         let downD = downsample(Array(netHist.suffix(count)), to: 120), upD = downsample(Array(upHist.suffix(count)), to: 120)
         var t: [Tile] = [
             Tile(symbol: "cpu", title: "CPU", badge: die, value: String(format: "%.0f", cpuLoad * 100), unit: "%", visual: .bars(bars),
-                 footer: "\(state(cpuLoad)) · \(ProcessInfo.processInfo.activeProcessorCount) cores", tint: heat(cpuLoad, base: .mint)),
-            Tile(symbol: "display", title: "GPU", badge: chip, value: String(format: "%.0f", gpu * 100), unit: "%", visual: .spark(gpuD),
-                 footer: "\(state(gpu)) · \(chip)", tint: heat(gpu, base: .violet)),
-            Tile(symbol: "memorychip", title: "MEM", badge: lastMem.level >= 4 ? "Critical" : lastMem.level >= 2 ? "Warning" : "Normal",
-                 value: String(format: "%.0f", memFrac * 100), unit: "%", visual: .spark(memD),
-                 footer: String(format: "%.2f GB / %.0f GB", lastMem.used / 1_073_741_824, lastMem.total / 1_073_741_824), tint: heat(lastMem.level >= 4 ? 1 : lastMem.level >= 2 ? 0.8 : memFrac * 0.6, base: .rose))]
+                 footer: "\(state(cpuLoad)) · \(ProcessInfo.processInfo.activeProcessorCount) cores",
+                 tint: loadInk(cpuLoad), chartState: .utilization(cpuLoad)),
+            Tile(symbol: "display", title: "GPU", badge: chip,
+                 value: gpu.map { String(format: "%.0f", $0 * 100) } ?? "—", unit: gpu == nil ? "" : "%", visual: .spark(gpuD),
+                 footer: gpu.map { "\(state($0)) · \(chip)" } ?? "Unavailable",
+                 tint: loadInk(gpu ?? 0), chartState: gpu.map(HealthState.utilization)),
+            Tile(symbol: "memorychip", title: "MEM", badge: memoryStatus?.pressureLabel ?? "Unavailable",
+                 value: String(format: "%.0f", memFrac * 100), unit: "%", visual: .spark(memD.map(Optional.some)),
+                 footer: String(format: "%.2f GB / %.0f GB", lastMem.used / 1_073_741_824, lastMem.total / 1_073_741_824),
+                 tint: .chartInk, status: memoryStatus)]
         if let d = diskSpace() {
             let used = d.total - d.free
             diskUsedFraction = used / d.total
+            let lowSpace = diskUsedFraction > Self.storageWarningFraction
             t.append(Tile(symbol: "internaldrive", title: "Free space", badge: String(format: "%.0f GB", d.total / 1e9),
-                          value: String(format: "%.0f", d.free / 1e9), unit: "GB", visual: .bar(used / d.total),
-                          footer: String(format: "%.0f GB used · %.0f%%", used / 1e9, used / d.total * 100), tint: heat(pow(used / d.total, 3), base: .periwinkle)))
+                          value: String(format: "%.0f", d.free / 1e9), unit: "GB", visual: .bar(diskUsedFraction),
+                          footer: lowSpace ? String(format: "Low space · %.0f%% used", diskUsedFraction * 100)
+                                           : String(format: "%.0f GB used · %.0f%%", used / 1e9, diskUsedFraction * 100),
+                          tint: loadInk(pow(diskUsedFraction, 3)), status: lowSpace ? .warning : nil, chartState: .normal))
         }
         let netScale = max(max(downD.max() ?? 0, upD.max() ?? 0), 10_000)
         var net = Tile(symbol: "network", title: "Network", badge: "Live", value: down.0, unit: down.1,
-                       visual: .dual(downD.map { $0 / netScale }, upD.map { $0 / netScale }), footer: "", tint: .netDown)
+                       visual: .dual(downD.map { $0 / netScale }, upD.map { $0 / netScale }), footer: "", tint: .emphasisInk, chartState: .normal)
         net.value2 = up.0
         net.unit2 = up.1
         net.wide = true
         t.append(net)
-        t.append(Tile(symbol: "thermometer.medium", title: "Thermal", badge: lastLabel,
+        let temperatureWarning = thermalOverLimit && (lastThermalStatus == nil || lastThermalStatus == .normal)
+        t.append(Tile(symbol: "thermometer.medium", title: "Thermal", badge: temperatureWarning ? "Hot" : lastLabel,
                       value: lastDie.map { prefs.temperature($0, unit: false) } ?? "–", unit: prefs.bool("fahrenheit") ? "°F" : "°C", visual: .bar((lastDie ?? 0) / 100),
-                      footer: (lastBody.map { "Body " + prefs.temperature($0) } ?? "CPU temperature") + " · \(chip)", tint: heat(((lastDie ?? 35) - 30) / 65, base: .aqua)))
-        func pct(_ a: [Double], total: Int) -> [String] {
-            a.enumerated().map { String(format: "%.0f%% · ", $1 * 100) + ago($0, of: a.count, total: total) }
+                      footer: (lastBody.map { "Body " + prefs.temperature($0) } ?? "CPU temperature") + " · \(chip)",
+                      tint: loadInk(((lastDie ?? 35) - 30) / 65), status: temperatureWarning ? .warning : lastThermalStatus))
+        func pct(_ a: [Double?], total: Int) -> [String] {
+            a.enumerated().map { index, value in
+                value.map { String(format: "%.0f%% · ", $0 * 100) + ago(index, of: a.count, total: total) } ?? ""
+            }
         }
         t[0].readouts = bars.enumerated().map { $1 > 0 ? String(format: "%.0f%% · ", $1 * 100) + ago($0, of: bars.count, total: bars.count) : "" }
         t[1].readouts = pct(gpuD, total: min(gpuHist.count, count))
-        t[2].readouts = pct(memD, total: min(memHist.count, count))
+        t[2].readouts = pct(memD.map(Optional.some), total: min(memHist.count, count))
         if let n = t.firstIndex(where: { $0.title == "Network" }) {
             t[n].readouts = downD.enumerated().map { "\(rate($1).0) \(rate($1).1) · " + ago($0, of: downD.count, total: min(netHist.count, count)) }
             t[n].readouts2 = upD.enumerated().map { "\(rate($1).0) \(rate($1).1) · " + ago($0, of: upD.count, total: min(upHist.count, count)) }
         }
         lastBatt = batteryInfo()
         if let b = lastBatt {
-            let status = b.charging ? "Charging" : b.plugged ? "Plugged in" : "On battery"
+            let lowBattery = !b.plugged && b.charge <= Int(prefs.number("batteryLow"))
+            let status = b.charging ? "Charging" : b.plugged ? "Plugged in" : lowBattery ? "Low battery" : "On battery"
             t.append(Tile(symbol: b.charging ? "battery.100.bolt" : "battery.100", title: "Battery", badge: status,
                           value: "\(b.charge)", unit: "%", visual: .bar(Double(b.charge) / 100),
-                          footer: battProfile.maxCapacity == "–" ? "\(b.cycles) charge cycles" : "Health \(battProfile.maxCapacity) · \(b.cycles) cycles", tint: b.plugged ? .emerald : heat(pow(1 - Double(b.charge) / 100, 2.2), base: .emerald)))
+                          footer: battProfile.maxCapacity == "–" ? "\(b.cycles) charge cycles" : "Health \(battProfile.maxCapacity) · \(b.cycles) cycles",
+                          tint: b.plugged ? .chartInk : loadInk(pow(1 - Double(b.charge) / 100, 2.2)),
+                          status: b.plugged ? .normal : lowBattery ? .warning : nil, chartState: .normal))
             func mah(_ v: Int) -> String { v > 0 ? "\(v.formatted()) mAh" : "–" }
             var time = "–"
             if let m = b.minutes { time = "\(m / 60 > 0 ? "\(m / 60) h " : "")\(m % 60) min " + (b.charging ? "to full" : "left") }
@@ -1888,25 +2041,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         let order = prefs.order
         t.sort { (order.firstIndex(of: $0.title) ?? order.count) < (order.firstIndex(of: $1.title) ?? order.count) }
-        if prefs.bool("compact") { t = t.filter { prefs.strings("compactCards").contains($0.title) } }
-        tiles.tiles = t
-        tileHeightConstraint?.constant = tiles.requiredHeight
-        tiles.needsDisplay = true
-        updateMenuReadings()
-        relayoutPanel()
+        availableTiles = t
+        applyTileLayout()
     }
 
-    /// A compact template mark adopts the menu bar's current appearance.
-    private func setMenuBarIcon() {
-        guard iconName.isEmpty else { return }
-        iconName = "sense-signal"
-        let icon = SenseMark.menuBarIcon()
-        item.length = NSStatusItem.variableLength
-        item.button?.title = ""
-        item.button?.imagePosition = .imageOnly
-        item.button?.image = icon
-        item.button?.setAccessibilityLabel("Sense — system monitor")
-        item.button?.isBordered = false
+    private func applyTileLayout() {
+        let visible = prefs.visibleTiles
+        tiles.tiles = availableTiles.filter { visible.contains($0.title) }
+        tiles.isHidden = tiles.tiles.isEmpty
+        emptyTiles.isHidden = !tiles.tiles.isEmpty
+        tileHeightConstraint?.constant = tiles.requiredHeight
+        relayoutPanel()
     }
 
     /// Eases a view's opacity to `target` over about 0.18 s. Runs in common modes so it also ticks while the menu is open.
@@ -1963,13 +2108,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func refresh() {
-        let (label, color, detail): (String, NSColor, String)
-        switch ProcessInfo.processInfo.thermalState {
-        case .nominal:  (label, color, detail) = ("Nominal", .emerald, "Running cool")
-        case .fair:     (label, color, detail) = ("Fair", .systemYellow, "Warm")
-        case .serious:  (label, color, detail) = ("Serious", .systemOrange, "Slowing down")
-        case .critical: (label, color, detail) = ("Critical", .systemRed, "Throttling")
-        @unknown default: (label, color, detail) = ("Unknown", .systemGray, "")
+        let state = ProcessInfo.processInfo.thermalState
+        let (label, health, detail): (String, HealthState?, String)
+        switch state {
+        case .nominal:  (label, health, detail) = ("Nominal", .normal, "Running cool")
+        case .fair:     (label, health, detail) = ("Fair", .warning, "Warm")
+        case .serious:  (label, health, detail) = ("Serious", .warning, "Slowing down")
+        case .critical: (label, health, detail) = ("Critical", .critical, "Throttling")
+        @unknown default: (label, health, detail) = ("Unknown", nil, "")
         }
         updateLive(sampleHistory: true)
         updateProcesses()
@@ -1977,20 +2123,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         lastDie = sensors.die
         lastBody = sensors.battery
         lastLabel = label
-        let state = ProcessInfo.processInfo.thermalState
-        func level(_ v: Double?, _ cuts: [Double]) -> (String, NSColor) {
-            guard let v else { return ("n/a", .systemGray) }
-            return v < cuts[0] ? ("Cool", .emerald) : v < cuts[1] ? ("Warm", .systemYellow) : v < cuts[2] ? ("Hot", .systemOrange) : ("Very hot", .systemRed)
+        lastThermalStatus = health
+        func level(_ v: Double?, _ cuts: [Double]) -> (String, HealthState?) {
+            guard let v else { return ("n/a", nil) }
+            return v < cuts[0] ? ("Cool", .normal) : v < cuts[1] ? ("Warm", .warning) : v < cuts[2] ? ("Hot", .warning) : ("Very hot", .critical)
         }
         func reading(_ v: Double?) -> String { v.map { prefs.temperature($0) } ?? "n/a" }
         let cpu = level(sensors.die, [70, 85, 95]), body = level(sensors.battery, [40, 45, 50]), ssd = level(sensors.ssd, [60, 70, 85])
         sensorTable.rows = [
-            SensorRow(name: "CPU/SoC", value: reading(sensors.die), status: cpu.0, color: cpu.1),
-            SensorRow(name: "Body (approx)", value: reading(sensors.battery), status: body.0, color: body.1),
-            SensorRow(name: "SSD", value: reading(sensors.ssd), status: ssd.0, color: ssd.1),
-            SensorRow(name: "Thermal pressure", value: label, status: detail, color: color)]
+            SensorRow(name: "CPU/SoC", value: reading(sensors.die), status: cpu.0, health: cpu.1),
+            SensorRow(name: "Body (approx)", value: reading(sensors.battery), status: body.0, health: body.1),
+            SensorRow(name: "SSD", value: reading(sensors.ssd), status: ssd.0, health: ssd.1),
+            SensorRow(name: "Thermal pressure", value: label, status: detail, health: health)]
         sensorTable.needsDisplay = true
-        sensorHeader.summary = "CPU " + reading(sensors.die) + " · " + (ProcessInfo.processInfo.thermalState == .nominal ? "Nominal" : label)
+        sensorHeader.summary = "CPU " + reading(sensors.die) + " · " + label
         updateTiles(sample: false, record: false)
         checkAlerts(thermal: state, label: label)
         saveTick += 1
